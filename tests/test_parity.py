@@ -18,7 +18,7 @@ def test_constructor_properties_and_evaluation_match_upstream(nodes):
     assert np.allclose(ours.evaluate_multi(values), theirs.evaluate_multi(values), atol=2e-14)
     assert np.allclose(ours.evaluate(.371), theirs.evaluate(.371), atol=2e-14)
 
-def test_evaluate_multi_simd_tail_and_parallel_threshold_match_upstream():
+def test_evaluate_multi_simd_tail_and_large_batch_match_upstream():
     nodes = CURVES[0]
     ours, theirs = mb.Curve.from_nodes(nodes), bezier.Curve.from_nodes(nodes)
     values = np.asfortranarray(np.linspace(0., 1., 262_147))
@@ -32,6 +32,15 @@ def test_subdivide_specialize_and_elevate_match_upstream(nodes):
     assert np.allclose(or_.nodes, tr.nodes, atol=2e-14)
     assert np.allclose(ours.specialize(.13, .83).nodes, theirs.specialize(.13, .83).nodes, atol=2e-14)
     assert np.allclose(ours.elevate().nodes, theirs.elevate().nodes, atol=2e-14)
+
+def test_subdivide_simd_tail_matches_upstream():
+    rng = np.random.default_rng(42)
+    for dimension, degree in ((1, 12), (2, 12), (3, 7), (5, 8)):
+        nodes = np.asfortranarray(rng.normal(size=(dimension, degree + 1)))
+        ours, theirs = mb.Curve.from_nodes(nodes), bezier.Curve.from_nodes(nodes)
+        ol, or_ = ours.subdivide(); tl, tr = theirs.subdivide()
+        assert np.allclose(ol.nodes, tl.nodes, rtol=0.0, atol=2e-14)
+        assert np.allclose(or_.nodes, tr.nodes, rtol=0.0, atol=2e-14)
 
 def test_reduce_locate_and_length_match_upstream():
     nodes = np.asfortranarray([[0., 1.], [0., 2.]])

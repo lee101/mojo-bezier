@@ -1,6 +1,7 @@
 """Focused upstream-shaped ``bezier.Curve`` API backed by Mojo kernels."""
 from __future__ import annotations
 import enum
+import threading
 import numpy as np
 from ._lib import addr, f64_fortran, lib
 
@@ -40,22 +41,39 @@ def _derivative(nodes, s):
     degree = nodes.shape[1] - 1
     return np.zeros(nodes.shape[0]) if degree == 0 else _evaluate(degree * (nodes[:, 1:] - nodes[:, :-1]), s)
 
-def _intersection_boxes(a, b, tolerance):
-    max_frames = 16_384
+_intersection_storage = threading.local()
+
+def _intersection_buffers(record, max_frames, max_pairs):
+    required = max(max_frames * record + 8, max_pairs)
+    work = getattr(_intersection_storage, "work", None)
+    pairs = getattr(_intersection_storage, "pairs", None)
+    if work is None or work.size < required:
+        work = _intersection_storage.work = np.empty(required, dtype=np.float64)
+    if pairs is None or pairs.shape[1] < max_pairs:
+        pairs = _intersection_storage.pairs = np.empty((2, max_pairs), dtype=np.float64, order="F")
+    return work, pairs
+
+def _intersections(a, b):
+    max_frames, max_pairs = 64, 16_384
     controls = 2 * (a.degree + b.degree + 2)
     record = controls + 5
-    work = np.empty(max_frames * record + 8, dtype=np.float64)
-    pairs = np.empty((2, max_frames), dtype=np.float64, order="F")
-    written = lib().mbz_intersect_candidates(
-        addr(a.nodes), a.degree, addr(b.nodes), b.degree, tolerance, 48,
-        addr(work), max_frames, addr(pairs), max_frames,
+    work, pairs = _intersection_buffers(record, max_frames, max_pairs)
+    written = lib().mbz_intersect(
+        addr(a.nodes), a.degree, addr(b.nodes), b.degree,
+        addr(work), max_frames, addr(pairs), max_pairs,
     )
     if written < 0:
         reason = "candidate buffer" if written == -2 else "subdivision stack"
         raise RuntimeError(f"Intersection {reason} exhausted; the operation was not completed.")
-    return [(pairs[0, index], pairs[1, index]) for index in range(written)]
+    return pairs[:, :written].copy(order="F")
 
 class Curve:
+    @classmethod
+    def _from_computed(cls, nodes, degree):
+        curve = object.__new__(cls)
+        curve._nodes, curve._degree = nodes, degree
+        return curve
+
     def __init__(self, nodes, degree, *, copy=True, verify=True):
         array = f64_fortran(nodes, copy=copy, name="Nodes")
         if array.ndim != 2: raise ValueError("Nodes must be a 2D array.")
@@ -83,7 +101,7 @@ class Curve:
         return result
     def subdivide(self):
         left, right = _split(self.nodes, 0.5)
-        return Curve(left, self.degree, copy=False), Curve(right, self.degree, copy=False)
+        return self._from_computed(left, self.degree), self._from_computed(right, self.degree)
     def specialize(self, start, end):
         if not 0.0 <= start <= 1.0 or not 0.0 <= end <= 1.0: raise ValueError("Specialization parameters must be in [0, 1].")
         if start == end: return Curve(np.repeat(self.evaluate(start), self.degree + 1, axis=1), self.degree, copy=False)
@@ -128,23 +146,7 @@ class Curve:
         if not isinstance(other, Curve): raise TypeError("Can only intersect another Curve.")
         if self.dimension != 2 or other.dimension != 2: raise NotImplementedError("Intersection is currently implemented for planar curves.")
         if strategy not in (IntersectionStrategy.GEOMETRIC, IntersectionStrategy.ALGEBRAIC): raise ValueError("Unknown intersection strategy.")
-        extent = max(np.ptp(self.nodes), np.ptp(other.nodes), 1.0)
-        accepted = []
-        candidates = _intersection_boxes(self, other, 1e-9 * extent)
-        if candidates:
-            pairs = np.empty((2, len(candidates)), dtype=np.float64, order="F")
-            pairs[0] = [t for t, _ in candidates]
-            pairs[1] = [u for _, u in candidates]
-            valid = np.empty(len(candidates), dtype=np.int64)
-            lib().mbz_refine_candidates(
-                addr(self.nodes), self.degree, addr(other.nodes), other.degree,
-                addr(pairs), len(candidates), addr(valid),
-            )
-            for index in np.flatnonzero(valid):
-                result = (pairs[0, index], pairs[1, index])
-                if not any(max(abs(result[0]-x), abs(result[1]-y)) < 2e-7 for x, y in accepted): accepted.append(result)
-        accepted.sort(reverse=True)
-        return np.asfortranarray(accepted, dtype=np.float64).T if accepted else np.empty((2, 0), order="F")
+        return _intersections(self, other)
     def self_intersections(self, strategy=IntersectionStrategy.GEOMETRIC, verify=True):
         if self.dimension != 2: raise NotImplementedError("Self intersection is currently implemented for planar curves.")
         left, right = self.subdivide(); pairs = left.intersect(right, strategy=strategy, verify=verify)

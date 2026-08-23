@@ -54,16 +54,24 @@ machine: x86_64, Linux-6.8.0-136-generic-x86_64-with-glibc2.39
 
 | kernel | mojo-bezier | upstream bezier | ratio |
 | --- | ---: | ---: | ---: |
-| evaluate_multi degree 12, 20,000 values | 1.063 ms | 1.234 ms | 1.16x faster |
-| subdivide degree 12 | 0.019 ms | 0.006 ms | 0.31x slower |
-| planar cubic-line intersection | 0.077 ms | 0.027 ms | 0.35x slower |
+| evaluate_multi degree 12, 20,000 values | 1.411 ms | 1.516 ms | 1.07x faster |
+| subdivide degree 12 | 0.010 ms | 0.008 ms | 0.76x slower |
+| planar cubic-line intersection | 0.028 ms | 0.034 ms | 1.22x faster |
 
-`evaluate_multi` uses SIMD batches with scalar tails. Intersection calls Mojo
-for control-polygon subdivision and Newton refinement, retaining NumPy-owned
-buffers across the FFI boundary. No GPU path is included: these benchmarked kernels are either
-small and branch-heavy or insufficiently arithmetic-intensive after host/device
-transfer, so a GPU path would lose at practical sizes. These are measured
-results, not projections.
+`evaluate_multi` uses SIMD batches with scalar tails. Subdivision now uses an
+in-place SIMD de Casteljau pass over caller-owned output storage, also with a
+scalar tail. Intersection performs control-polygon subdivision, Newton
+refinement, deduplication, and ordering in one Mojo call while reusing
+thread-local NumPy-owned work buffers across the FFI boundary.
+
+No parallel path is included: this pinned standard library does not expose
+`parallelize`, and the benchmarked subdivision and intersection calls are too
+small and dependent or branch-heavy to benefit from thread launch overhead. No
+GPU path is included: the device-memory check passed with 12,320 MiB free, but
+these kernels are either small and branch-heavy or below roughly two flops per
+byte once control-node, value, result, and host/device traffic is counted. A GPU
+path would therefore lose at the practical sizes covered here. These are
+measured results, not projections.
 
 <!-- /BENCHMARKS -->
 

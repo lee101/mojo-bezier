@@ -7,7 +7,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 SRC = os.path.join(ROOT, "src", "capi.mojo")
 LIB = os.environ.get("MOJO_BEZIER_LIB") or os.path.join(ROOT, "dist", "libmojo-bezier.so")
 I, F = ctypes.c_int64, ctypes.c_double
-SIGNATURES = {"mbz_evaluate_multi": ([I]*6, None), "mbz_subdivide": ([I]*5, None), "mbz_elevate": ([I]*4, None), "mbz_refine_candidates": ([I]*7, None), "mbz_intersect_candidates": ([I, I, I, I, F, I, I, I, I, I], I)}
+SIGNATURES = {"mbz_evaluate_multi": ([I]*6, None), "mbz_subdivide": ([I]*5, None), "mbz_elevate": ([I]*4, None), "mbz_refine_candidates": ([I]*7, None), "mbz_intersect_candidates": ([I, I, I, I, F, I, I, I, I, I], I), "mbz_intersect": ([I]*8, I)}
 
 def build():
     if os.environ.get("MOJO_BEZIER_LIB") and os.path.exists(LIB): return LIB

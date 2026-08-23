@@ -108,18 +108,25 @@ def mbz_subdivide(nodes_addr: Int, dimension: Int, degree: Int, left_addr: Int, 
     var nodes = p(nodes_addr)
     var left = p(left_addr)
     var right = p(right_addr)
-    var half_power = 1.0
-    for i in range(degree + 1):
+    var total = (degree + 1) * dimension
+    var vector_end = (total // W) * W
+    for i in range(0, vector_end, W):
+        right.store(i, nodes.load[width=W](i))
+    for i in range(vector_end, total):
+        right[i] = nodes[i]
+    for d in range(dimension):
+        left[d] = right[d]
+    for level in range(1, degree + 1):
+        var active = (degree - level + 1) * dimension
+        var active_vector_end = (active // W) * W
+        for i in range(0, active_vector_end, W):
+            var current = right.load[width=W](i)
+            var following = right.load[width=W](i + dimension)
+            right.store(i, 0.5 * (current + following))
+        for i in range(active_vector_end, active):
+            right[i] = 0.5 * (right[i] + right[i + dimension])
         for d in range(dimension):
-            var lval = Float64(0)
-            var rval = Float64(0)
-            for j in range(i + 1):
-                var weight = choose(i, j) * half_power
-                lval += weight * nodes[j * dimension + d]
-                rval += weight * nodes[(degree - i + j) * dimension + d]
-            left[i * dimension + d] = lval
-            right[(degree - i) * dimension + d] = rval
-        half_power *= 0.5
+            left[level * dimension + d] = right[d]
 
 
 @export("mbz_elevate")
@@ -304,4 +311,58 @@ def mbz_intersect_candidates(a_addr: Int, degree_a: Int, b_addr: Int, degree_b: 
         work[child0 + controls + 4] = Float64(depth + 1)
         work[child1 + controls + 4] = Float64(depth + 1)
         top += 2
+    return written
+
+
+@export("mbz_intersect")
+def mbz_intersect(a_addr: Int, degree_a: Int, b_addr: Int, degree_b: Int, work_addr: Int, max_frames: Int, pairs_addr: Int, max_pairs: Int) abi("C") -> Int:
+    if degree_a < 0 or degree_b < 0:
+        return -3
+    var a = p(a_addr)
+    var b = p(b_addr)
+    var amin = a[0]
+    var amax = amin
+    for i in range(1, 2 * (degree_a + 1)):
+        amin = min(amin, a[i])
+        amax = max(amax, a[i])
+    var bmin = b[0]
+    var bmax = bmin
+    for i in range(1, 2 * (degree_b + 1)):
+        bmin = min(bmin, b[i])
+        bmax = max(bmax, b[i])
+    var extent = max(1.0, max(amax - amin, bmax - bmin))
+    var count = mbz_intersect_candidates(
+        a_addr, degree_a, b_addr, degree_b, 1.0e-9 * extent, 48,
+        work_addr, max_frames, pairs_addr, max_pairs,
+    )
+    if count <= 0:
+        return count
+    mbz_refine_candidates(a_addr, degree_a, b_addr, degree_b, pairs_addr, count, work_addr)
+    var pairs = p(pairs_addr)
+    var valid = IPtr(unsafe_from_address=work_addr)
+    var written = 0
+    for i in range(count):
+        if valid[i] == 0:
+            continue
+        var t = pairs[2 * i]
+        var u = pairs[2 * i + 1]
+        var duplicate = False
+        for j in range(written):
+            if max(abs(t - pairs[2 * j]), abs(u - pairs[2 * j + 1])) < 2.0e-7:
+                duplicate = True
+                break
+        if not duplicate:
+            pairs[2 * written] = t
+            pairs[2 * written + 1] = u
+            written += 1
+    for i in range(1, written):
+        var t = pairs[2 * i]
+        var u = pairs[2 * i + 1]
+        var j = i
+        while j > 0 and (pairs[2 * (j - 1)] < t or (pairs[2 * (j - 1)] == t and pairs[2 * (j - 1) + 1] < u)):
+            pairs[2 * j] = pairs[2 * (j - 1)]
+            pairs[2 * j + 1] = pairs[2 * (j - 1) + 1]
+            j -= 1
+        pairs[2 * j] = t
+        pairs[2 * j + 1] = u
     return written
