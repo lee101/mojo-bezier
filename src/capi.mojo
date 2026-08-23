@@ -1,13 +1,10 @@
 """C ABI for hot paths of planar Bezier curves. Storage belongs to Python."""
 
-from std.algorithm import parallelize
 from std.sys.info import simd_width_of as simdwidthof
 
 comptime Ptr = UnsafePointer[Float64, AnyOrigin[mut=True]]
 comptime IPtr = UnsafePointer[Int64, AnyOrigin[mut=True]]
 comptime W = simdwidthof[DType.float64]()
-comptime PARALLEL_THRESHOLD = 262144
-comptime VALUES_PER_TASK = 1024
 
 
 def p(addr: Int) -> Ptr:
@@ -101,29 +98,7 @@ def mbz_evaluate_multi(nodes_addr: Int, dimension: Int, degree: Int, values_addr
     var nodes = p(nodes_addr)
     var values = p(values_addr)
     var result = p(result_addr)
-    if count < PARALLEL_THRESHOLD:
-        evaluate_range(nodes, dimension, degree, values, 0, count, result)
-        return
-    var tasks = (count + VALUES_PER_TASK - 1) // VALUES_PER_TASK
-    var nodes_address = nodes_addr
-    var values_address = values_addr
-    var result_address = result_addr
-
-    @parameter
-    def work(task: Int):
-        var start = task * VALUES_PER_TASK
-        var end = min(start + VALUES_PER_TASK, count)
-        evaluate_range(
-            Ptr(unsafe_from_address=nodes_address),
-            dimension,
-            degree,
-            Ptr(unsafe_from_address=values_address),
-            start,
-            end,
-            Ptr(unsafe_from_address=result_address),
-        )
-
-    parallelize[work](tasks, min(tasks, 16))
+    evaluate_range(nodes, dimension, degree, values, 0, count, result)
 
 
 @export("mbz_subdivide")
